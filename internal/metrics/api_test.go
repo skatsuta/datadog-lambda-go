@@ -22,6 +22,7 @@ const (
 	mockAPIKey          = "12345"
 	mockEncryptedAPIKey = "mockEncrypted"
 	mockDecryptedAPIKey = "mockDecrypted"
+	mockAPIKeySecretARN = "arn:aws:secretsmanager:us-east-1:123456789012:secret:test-api-key"
 )
 
 type (
@@ -33,6 +34,15 @@ type (
 
 func (md *mockDecrypter) Decrypt(cipherText string) (string, error) {
 	return md.returnValue, md.returnError
+}
+
+type mockSecretFetcher struct {
+	returnValue string
+	returnError error
+}
+
+func (m *mockSecretFetcher) FetchSecret(secretID string) (string, error) {
+	return m.returnValue, m.returnError
 }
 
 func TestAddAPICredentials(t *testing.T) {
@@ -166,6 +176,39 @@ func TestDecryptsUsingKMSKey(t *testing.T) {
 
 	cl := MakeAPIClient(context.Background(), APIClientOptions{baseAPIURL: server.URL, apiKey: "", kmsAPIKey: mockEncryptedAPIKey, decrypter: &md})
 	err := cl.SendMetrics(am)
+
+	assert.NoError(t, err)
+	assert.True(t, called)
+}
+
+func TestFetchAPIKeyUsingSecretsManager(t *testing.T) {
+	called := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		assert.Equal(t, "/distribution_points?api_key="+mockAPIKey, r.URL.String())
+	}))
+	defer server.Close()
+
+	am := []APIMetric{
+		{
+			Name:       "metric-1",
+			Host:       nil,
+			Tags:       []string{"a", "b", "c"},
+			MetricType: DistributionType,
+			Points: []interface{}{
+				[]interface{}{float64(1), []interface{}{float64(2)}},
+				[]interface{}{float64(3), []interface{}{float64(4)}},
+				[]interface{}{float64(5), []interface{}{float64(6)}},
+			},
+		},
+	}
+	client := MakeAPIClient(context.Background(), APIClientOptions{
+		baseAPIURL:      server.URL,
+		apiKey:          "",
+		apiKeySecretARN: mockAPIKeySecretARN,
+		secretFetcher:   &mockSecretFetcher{returnValue: mockAPIKey},
+	})
+	err := client.SendMetrics(am)
 
 	assert.NoError(t, err)
 	assert.True(t, called)
